@@ -7,7 +7,7 @@ from datetime import datetime
 import argparse
 import sqlite3 as sql
 
-def testSpeed():
+def main():
     '''Run a speed test, check if the speeds are to low, and if they are
     send out a tweet to shaw that lets them know!'''
     TARGET_DOWNLOAD = 60
@@ -16,44 +16,31 @@ def testSpeed():
     print('------------------ RUNNING TEST ---------------------')
 
     db = databaseInit('data/sqlite3.sqlite')
-    dailyAverage = False
-    speeds = os.popen("speedtest-cli --simple").read()
-    print (speeds)
 
-    if 'errno' in speeds.lower():
-        connected = False
-    else:
-        connected = True
+    dailyAverage = isDailyAverage()
 
-    twitterInfo = ClientInfo.info()
-    
-    twitterApi = twitter.Api(
-        consumer_key = twitterInfo.consumerKey,
-        consumer_secret = twitterInfo.consumerSecret,
-        access_token_key = twitterInfo.accessTokenKey,
-        access_token_secret = twitterInfo.accessTokenSecret
-    )
+    speeds, connected = testSpeeds()
+
+    twitterApi = getTwitterInfo()
     
     if connected:
         #parse the results for the speeds
         results = re.findall(r'\d+\.\d+', speeds, re.IGNORECASE|re.DOTALL)
-
-        #fix this
         tweetID = getMaxTweetID(db) + 1
         
         ping = int(float(results[0]))
         downSpeed = int(float(results[1]))
         upSpeed = int(float(results[2]))
         tweet = 'SpeedTest #{2}: Hey @ShawInfo, why is my internet so slow @ {0}Mbs down/{1}Mbs up when I pay for 60/6 in Edmonton. @Shawhelp #speedtest'.format(downSpeed, upSpeed, str(tweetID).zfill(3))
-        #check if the download speed is less than 25% of the target (what we pay for)
-        if downSpeed < TARGET_DOWNLOAD * .25:
-            #twitterApi.PostUpdate(tweet)
-            pass
 
-        elif dailyAverage:
+        if dailyAverage:
+            loggedPing, loggedDown, loggedUp = dailyAverageSpeeds(db)
             tweet = 'Daily average internet speeds: {0}Mbs down/{1}Mbs up, with {2}ms ping. Tested every hour by your friendly neighborhood pi. #speedtest'.format(loggedDown, loggedUp, loggedPing)
             twitterApi.PostUpdate(tweet)
-
+            
+        elif downSpeed < TARGET_DOWNLOAD * .25:
+            twitterApi.PostUpdate(tweet)
+        
     else:
         #set default info if there is no connection
         ping = sys.maxint
@@ -66,7 +53,19 @@ def testSpeed():
     dailyAverageSpeeds(db)
     logTweet(db, data)
     db.close()
+    
     print('----------------- FINISHED TEST ---------------------')
+
+def testSpeeds():
+    speeds = os.popen("speedtest-cli --simple").read()
+    print (speeds)
+
+    if 'errno' in speeds.lower():
+        connected = False
+    else:
+        connected = True
+
+    return (speeds, connected)
     
 def databaseInit(location):
     db = sql.connect(location)
@@ -113,12 +112,37 @@ def dailyAverageSpeeds(dbconn):
     cursor.execute("""SELECT AVG(Down_Speed) FROM tweets
                    WHERE datetime(Log_Date) > datetime('now','-1 day')""")
     resultDown = cursor.fetchone()
+
     cursor.execute("""SELECT AVG(Up_Speed) FROM tweets
                    WHERE datetime(Log_Date) > datetime('now','-1 day')""")
     resultUp = cursor.fetchone()
+
+    cursor.execute("""SELECT AVG(Ping) FROM tweets
+                   WHERE datetime(Log_Date) > datetime('now','-1 day')""")
+    resultPing = cursor.fetchone()
+    
     cursor.close()
 
-    return (resultDown[0], resultUp[0])
+    return (resultPing[0], resultDown[0], resultUp[0])
+
+def isDailyAverage():
+    hour = datetime.now().hour
+
+    if hour == 17:
+        return True
+    return False
+
+def getTwitterInfo():
+    twitterInfo = ClientInfo.info()
+    
+    twitterApi = twitter.Api(
+        consumer_key = twitterInfo.consumerKey,
+        consumer_secret = twitterInfo.consumerSecret,
+        access_token_key = twitterInfo.accessTokenKey,
+        access_token_secret = twitterInfo.accessTokenSecret
+    )
+
+    return twitterApi
 
 if __name__ == '__main__':
-    testSpeed();
+    main();
